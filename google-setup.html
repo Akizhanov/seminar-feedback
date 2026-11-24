@@ -1,0 +1,53 @@
+<!doctype html><html lang="ru"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>Подключение ответов</title><style>body{max-width:800px;margin:30px auto;padding:20px;font:18px/1.6 system-ui;color:#183a35;background:#f4f3ef}li{margin:16px 0}button,a{color:#245a47}button{padding:14px;border-radius:10px}textarea{width:100%;height:260px;font:13px monospace}p{padding:12px;border-radius:10px;background:#e5ede3}</style><h1>Подключение Google Таблицы</h1><p>Пока не выполнены шаги ниже, ответы участников не сохраняются.</p><ol><li>Откройте <a href="https://script.google.com/home/start">Google Apps Script</a> под своим Google-аккаунтом и создайте новый проект. На телефоне может понадобиться версия сайта для компьютера.</li><li>Удалите пример кода в редакторе и вставьте готовый код ниже. Сохраните проект.</li><li>В списке функций выберите <b>setup</b> и нажмите <b>Выполнить</b>. Подтвердите доступ только если вы проверили код и согласны дать ему доступ к Google Таблицам. Если администратор запрещает запуск, настройку завершить не получится.</li><li>В журнале выполнения появятся <b>ссылка на созданную таблицу</b> и <b>пароль сводки</b>. Сохраните их у себя. Пароль в чат присылать не нужно.</li><li>Нажмите <b>Развернуть → Новое развертывание → Веб-приложение</b>. «Запускать от имени» — <b>Я</b>; «У кого есть доступ» — <b>Все</b>. Публичный обработчик сможет принимать ответы; чтение сводки защищено паролем. Сама таблица остаётся закрытой. Нажмите «Развернуть».</li><li>Скопируйте URL веб-приложения, заканчивающийся <b>/exec</b>, и пришлите его в чат. По этой ссылке я подключу сайт и проверю отправку. URL /dev не подходит.</li></ol><button id="copy">Скопировать весь код</button><span id="status" role="status"></span><textarea id="code" readonly>// Семинар: Google Таблица остаётся закрытой. Публичный обработчик принимает только ответы.
+// Один раз запустите setup(), затем Deploy → New deployment → Web app.
+// Execute as: Me. Who has access: Anyone. Не публикуйте саму таблицу.
+function setup() {
+  var p = PropertiesService.getScriptProperties();
+  var lock = LockService.getScriptLock(); lock.waitLock(30000);
+  try {
+    if (!p.getProperty(&#x27;SPREADSHEET_ID&#x27;)) {
+      var book = SpreadsheetApp.create(&#x27;Семинар — ответы участников&#x27;);
+      var sheet = book.getSheets()[0]; sheet.setName(&#x27;Ответы&#x27;);
+      sheet.appendRow([&#x27;ID&#x27;,&#x27;Дата UTC&#x27;,&#x27;Язык&#x27;,&#x27;Оценка&#x27;,&#x27;Характеристика (код)&#x27;,&#x27;Формат (код)&#x27;,&#x27;Пожелания&#x27;]);
+      sheet.setFrozenRows(1); sheet.getRange(&#x27;A1:G1&#x27;).setFontWeight(&#x27;bold&#x27;).setBackground(&#x27;#dcebdd&#x27;);
+      sheet.setColumnWidth(7, 420);
+      p.setProperty(&#x27;SPREADSHEET_ID&#x27;, book.getId());
+    }
+    if (!p.getProperty(&#x27;ADMIN_PASSWORD&#x27;)) p.setProperty(&#x27;ADMIN_PASSWORD&#x27;, Utilities.getUuid());
+    console.log(&#x27;Таблица: https://docs.google.com/spreadsheets/d/&#x27; + p.getProperty(&#x27;SPREADSHEET_ID&#x27;));
+    console.log(&#x27;Пароль сводки (сохраните у себя, не публикуйте): &#x27; + p.getProperty(&#x27;ADMIN_PASSWORD&#x27;));
+  } finally { lock.releaseLock(); }
+}
+function output_(value) { return ContentService.createTextOutput(JSON.stringify(value)).setMimeType(ContentService.MimeType.JSON); }
+function doGet() { return output_({ok:true,service:&#x27;seminar-feedback&#x27;,version:1}); }
+function doPost(e) {
+  try {
+    if (!e || !e.postData || e.postData.contents.length &gt; 20000) return output_({ok:false,error:&#x27;Некорректный запрос&#x27;});
+    var raw = e.parameter &amp;&amp; e.parameter.payload;
+    if (!raw || raw.length &gt; 12000) return output_({ok:false,error:&#x27;Некорректный запрос&#x27;});
+    var d = JSON.parse(raw), p = PropertiesService.getScriptProperties();
+    var bookId = p.getProperty(&#x27;SPREADSHEET_ID&#x27;);
+    if (!bookId) return output_({ok:false,error:&#x27;Сначала запустите setup&#x27;});
+    if (d.action === &#x27;results&#x27;) {
+      if (!p.getProperty(&#x27;ADMIN_PASSWORD&#x27;) || d.password !== p.getProperty(&#x27;ADMIN_PASSWORD&#x27;)) return output_({ok:false,error:&#x27;Неверный пароль&#x27;});
+      var sheet = SpreadsheetApp.openById(bookId).getSheetByName(&#x27;Ответы&#x27;);
+      var last = sheet.getLastRow();
+      var data = last &gt; 1 ? sheet.getRange(2,1,last-1,7).getValues() : [];
+      return output_({ok:true, rows:data.filter(function(r){return r[0];}).reverse().map(function(r){return {id:r[0],created_at:r[1] instanceof Date?r[1].toISOString():r[1],lang:r[2],rating:Number(r[3]),ratingIndex:Number(r[3])-1,word:Number(r[4]),format:Number(r[5]),wishes:String(r[6])};})});
+    }
+    if (d.action !== &#x27;submit&#x27; || ![&#x27;ru&#x27;,&#x27;kz&#x27;].includes(d.lang) || !Number.isInteger(d.rating) || d.rating &lt; 1 || d.rating &gt; 5 || !Number.isInteger(d.word) || d.word &lt; 0 || d.word &gt; 4 || !Number.isInteger(d.format) || d.format &lt; 0 || d.format &gt; 4 || typeof d.wishes !== &#x27;string&#x27; || d.wishes.length &gt; 2000 || typeof d.id !== &#x27;string&#x27; || !/^[0-9a-f-]{36}$/.test(d.id)) return output_({ok:false,error:&#x27;Проверьте ответы&#x27;});
+    var lock = LockService.getScriptLock(); lock.waitLock(30000);
+    try {
+      var s = SpreadsheetApp.openById(bookId).getSheetByName(&#x27;Ответы&#x27;), count=s.getLastRow();
+      var found = count &gt; 1 &amp;&amp; s.getRange(2,1,count-1,1).createTextFinder(d.id).matchEntireCell(true).findNext();
+      if (!found) {
+        var wish=d.wishes.trim();
+        if (/^[=+@\-\t\r]/.test(wish)) wish=&quot;&#x27;&quot;+wish;
+        s.appendRow([d.id,new Date().toISOString(),d.lang,d.rating,d.word,d.format,wish]);
+        SpreadsheetApp.flush();
+      }
+      return output_({ok:true});
+    } finally { lock.releaseLock(); }
+  } catch (err) { return output_({ok:false,error:&#x27;Не удалось выполнить запрос. Повторите попытку.&#x27;}); }
+}
+</textarea><script>document.querySelector('#copy').onclick=async()=>{let t=document.querySelector('#code');try{await navigator.clipboard.writeText(t.value);document.querySelector('#status').textContent=' Код скопирован';}catch{t.focus();t.select();document.querySelector('#status').textContent=' Выделен весь код — выберите «Копировать»';}};</script></html>
